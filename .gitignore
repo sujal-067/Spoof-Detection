@@ -11,3 +11,4 @@ __pycache__/
 .ipynb_checkpoints/
 *.tmp
 tempCodeRunnerFile.python
+results/screenshot_*.png
