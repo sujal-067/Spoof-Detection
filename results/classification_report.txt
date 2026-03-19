@@ -1,0 +1,11 @@
+Accuracy : 100.00%
+F1 Score : 100.00%
+
+              precision    recall  f1-score   support
+
+          2D       1.00      1.00      1.00       982
+          3D       1.00      1.00      1.00       307
+
+    accuracy                           1.00      1289
+   macro avg       1.00      1.00      1.00      1289
+weighted avg       1.00      1.00      1.00      1289

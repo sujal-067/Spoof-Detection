@@ -1,0 +1,13 @@
+data/extracted/images/
+data/extracted/depths/
+data/extracted/labels/
+data/2d_images/
+data/depth_cache/
+weights/*.pth
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+.ipynb_checkpoints/
+*.tmp
+tempCodeRunnerFile.python
