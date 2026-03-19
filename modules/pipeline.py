@@ -24,6 +24,7 @@ depth_transform = transforms.Compose([
 
 _classifier = None
 
+
 def load_classifier(weights_path):
     global _classifier
     _classifier = DepthAwareClassifier(num_classes=2)
@@ -31,80 +32,129 @@ def load_classifier(weights_path):
     _classifier.load_state_dict(checkpoint["model_state"])
     _classifier.eval()
     print(f"[pipeline] Classifier loaded from {weights_path}")
-def classify_roi(frame_rgb, depth_map, bbox):
+
+
+def classify_roi(frame_rgb, depth_map, bbox, obj_label=""):
     """
-    Instead of classifying just the crop,
-    we use depth statistics of the ROI to determine 2D vs 3D.
-    Real 3D objects have HIGH depth variance.
-    Flat 2D objects have LOW depth variance.
+    Classify a detected region as 2D or 3D using depth variance.
+    Always returns exactly 3 values: (label, confidence, reason)
+
+    High depth variance = 3D (real object)
+    Low depth variance  = 2D (flat representation)
     """
     x1, y1, x2, y2 = bbox
 
+    # Guard against tiny or invalid boxes
     if (x2 - x1) < 10 or (y2 - y1) < 10:
-        return "unknown", 0.0
+        return "unknown", 0.0, "box too small"
 
     # Crop depth map to bounding box
     depth_crop = depth_map[y1:y2, x1:x2].astype(np.float32)
 
-    # Compute depth variance in this region
-    depth_std  = float(np.std(depth_crop))
+    # Compute depth variance
     depth_mean = float(np.mean(depth_crop))
+    depth_std  = float(np.std(depth_crop))
 
-    # Normalize variance relative to mean (coefficient of variation)
+    # Coefficient of variation
     cv = depth_std / (depth_mean + 1e-6)
 
-    # Threshold: high variance = 3D, low variance = 2D
-    # Tuned for MiDaS small output
-    # Threshold tuned for MiDaS small on indoor scenes
-    THRESHOLD = 0.08   # was 0.15 — lower = more sensitive to 3D
+    # Edge density
+    roi_rgb      = frame_rgb[y1:y2, x1:x2]
+    gray         = cv2.cvtColor(roi_rgb, cv2.COLOR_RGB2GRAY)
+    edges        = cv2.Canny(gray, 50, 150)
+    edge_density = float(edges.mean())
 
-    if cv > THRESHOLD:
-        label = "3D"
-        # Scale confidence: higher variance = more confident
-        conf  = min(0.99, 0.5 + cv * 3)
+    # Threshold
+    DEPTH_THRESHOLD = 0.08
+
+    if cv > DEPTH_THRESHOLD and edge_density < 90:
+        label  = "3D"
+        conf   = min(0.99, 0.5 + cv * 3)
+        reason = f"depth std={depth_std:.1f}"
     else:
-        label = "2D"
-        conf  = min(0.99, 0.5 + (THRESHOLD - cv) * 8)
+        label  = "2D"
+        conf   = max(0.5, min(0.99,
+                    0.5 + (DEPTH_THRESHOLD - cv) * 8 + 0.1))
+        reason = f"flat depth std={depth_std:.1f}"
 
-    return label, conf
+    return label, conf, reason
+
 
 def process_frame(frame):
     """
-    Full pipeline on one BGR frame:
-      1. Detect objects with YOLOv8
-      2. Generate depth map with MiDaS
-      3. Classify each detection as 2D or 3D
-      4. Annotate and return the frame
+    Full pipeline on one BGR frame.
+    Returns annotated side-by-side frame (RGB | Depth).
     """
     frame_rgb  = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    depth_map  = get_depth_map(frame)          # uint8 HxW
+    depth_map  = get_depth_map(frame)
     detections = detect_objects(frame)
+
+    depth_color = cv2.applyColorMap(depth_map, cv2.COLORMAP_MAGMA)
 
     for det in detections:
         x1, y1, x2, y2 = det["bbox"]
         obj_label       = det["label"]
-        dim_label, conf = classify_roi(frame_rgb, depth_map, det["bbox"])
 
-        # Color: green = 3D, red = 2D
+        dim_label, conf, reason = classify_roi(
+            frame_rgb, depth_map, det["bbox"], obj_label
+        )
+
         color = (0, 200, 80) if dim_label == "3D" else (0, 80, 220)
 
-        # Draw bounding box
+        # Annotate RGB
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
-        # Draw label background
-        text  = f"{obj_label} [{dim_label}] {conf:.0%}"
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
-        cv2.rectangle(frame, (x1, y1 - th - 8), (x1 + tw + 4, y1), color, -1)
+        text = f"{obj_label} [{dim_label}] {conf:.0%}"
+        (tw, th), _ = cv2.getTextSize(
+            text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+        cv2.rectangle(frame,
+                      (x1, y1 - th - 8), (x1 + tw + 4, y1),
+                      color, -1)
         cv2.putText(frame, text, (x1 + 2, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                    (255, 255, 255), 2)
 
-    # Overlay depth map (top-right corner, small)
-    h, w   = frame.shape[:2]
-    dsize  = (w // 4, h // 4)
-    depth_color = cv2.applyColorMap(depth_map, cv2.COLORMAP_MAGMA)
-    depth_small = cv2.resize(depth_color, dsize)
-    frame[10:10+dsize[1], w-dsize[0]-10:w-10] = depth_small
-    cv2.putText(frame, "depth", (w - dsize[0] - 10, dsize[1] + 24),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+        # Annotate depth
+        cv2.rectangle(depth_color, (x1, y1), (x2, y2), color, 2)
+        depth_crop = depth_map[y1:y2, x1:x2].astype(np.float32)
+        avg_d = float(np.mean(depth_crop))
+        std_d = float(np.std(depth_crop))
 
-    return frame
+        dlabel = f"{obj_label} [{dim_label}]"
+        (tw2, th2), _ = cv2.getTextSize(
+            dlabel, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(depth_color,
+                      (x1, y1 - th2 - 6), (x1 + tw2 + 4, y1),
+                      color, -1)
+        cv2.putText(depth_color, dlabel, (x1 + 2, y1 - 3),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                    (255, 255, 255), 1)
+        cv2.putText(depth_color,
+                    f"avg:{avg_d:.0f} std:{std_d:.0f}",
+                    (x1, y2 + 16),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                    (200, 255, 200), 1)
+
+    # Titles
+    cv2.putText(frame, "RGB + Detection",
+                (10, 28), cv2.FONT_HERSHEY_SIMPLEX,
+                0.8, (255, 255, 255), 2)
+    cv2.putText(frame, "Green=3D  Blue=2D",
+                (10, 52), cv2.FONT_HERSHEY_SIMPLEX,
+                0.5, (200, 200, 200), 1)
+    cv2.putText(depth_color, "MiDaS Depth Map",
+                (10, 28), cv2.FONT_HERSHEY_SIMPLEX,
+                0.8, (255, 255, 255), 2)
+    cv2.putText(depth_color, "Brighter = closer",
+                (10, 52), cv2.FONT_HERSHEY_SIMPLEX,
+                0.5, (200, 200, 200), 1)
+
+    # Stack side by side
+    h1, w1 = frame.shape[:2]
+    h2, w2 = depth_color.shape[:2]
+    if h1 != h2:
+        depth_color = cv2.resize(depth_color, (w2, h1))
+
+    separator    = np.zeros((h1, 4, 3), dtype=np.uint8)
+    separator[:] = (80, 80, 80)
+
+    return np.hstack([frame, separator, depth_color])
