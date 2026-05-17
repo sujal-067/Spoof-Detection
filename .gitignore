@@ -1,14 +1,53 @@
-data/extracted/images/
-data/extracted/depths/
-data/extracted/labels/
-data/2d_images/
-data/depth_cache/
-weights/*.pth
+﻿# ── Python ───────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
 .venv/
+*.egg-info/
+dist/
+build/
+
+# ── Database ─────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Model weights ────────────────────────────────────────
+models/weights/*.pt
+models/weights/*.pth
+models/weights/*.bin
+*.pt
+*.pth
+# (Keep best_model.pt tracked if you want — remove lines above selectively)
+
+# ── Data ─────────────────────────────────────────────────
+data/raw/
+data/processed/
+*.mat
+*.h5
+
+# ── Torch Hub cache ──────────────────────────────────────
+hub/
+
+# ── Env & secrets ────────────────────────────────────────
+.env
+.env.*
+*.key
+
+# ── IDE ──────────────────────────────────────────────────
 .vscode/
-.ipynb_checkpoints/
-*.tmp
-tempCodeRunnerFile.python
-results/screenshot_*.png
+.idea/
+*.swp
+.DS_Store
+
+# ── Logs ─────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Old / removed files ───────────────────────────────────
+# app.py has been REMOVED and replaced by app/main.py
+# Do NOT re-add app.py to this repository.
